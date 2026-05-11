@@ -1,5 +1,5 @@
 {
   "version": "1.0.0",
   "url": "",
-  "changelog": "Initial Release"
+  "changelog": "## Initial Release\n- Core GUI with Adw.NavigationSplitView\n- Drop Zone: drag-and-drop file injection\n- AppID Loader: generate ACF manifests\n- Supported Library: browse database games with header images\n- Steam Sync: fetch owned games via Vanity URL/SteamID64\n- Quick Access: one-click manifest generation\n- Auto-update engine with AdwBanner\n- Updates tab with changelog display\n- Multi-distro setup.sh (Fedora/Debian/openSUSE/Arch)\n- install.sh for local development\n- Subnautica 2 support (1962700, 50GB, StateFlags 1026)"
 }
