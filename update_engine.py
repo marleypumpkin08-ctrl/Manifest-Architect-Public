@@ -17,7 +17,7 @@ gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gdk, GLib, Gio, Pango
 
 
-CURRENT_VERSION = '1.0.0'
+CURRENT_VERSION = '1.1.0'
 OWNER = 'marleypumpkin08-ctrl'
 REPO = 'Manifest-Architect-Public'
 
@@ -122,11 +122,12 @@ def download_progress(block_num, block_size, total_size):
 # ---------- update window ----------
 
 class UpdateWindow(Adw.Window):
-    def __init__(self, update_info, binary_dest):
+    def __init__(self, update_info):
         super().__init__()
         self._update_info = update_info
-        self._binary_dest = binary_dest
-        self._cancelled = False
+        self._install_dir = str(Path(__file__).parent)
+        self._temp_dir = None
+        self._launch_script = None
 
         self.set_title('Update Available')
         self.set_default_size(520, 380)
@@ -164,7 +165,7 @@ class UpdateWindow(Adw.Window):
 
         msg = Gtk.Label(
             label=(
-                f'A new version of Manifest Architect is available.\n'
+                f'A new version of Manifest Studio is available.\n'
                 f'Your version: {update_info["current"]}  →  '
                 f'New version: {update_info["latest"]}'
             )
@@ -177,7 +178,7 @@ class UpdateWindow(Adw.Window):
         )
         changelog_box.set_visible(bool(update_info.get('changelog')))
 
-        cl_label = Gtk.Label(label='What\'s new:')
+        cl_label = Gtk.Label(label="What's new:")
         cl_label.set_halign(Gtk.Align.START)
         cl_label.add_css_class('caption')
 
@@ -240,31 +241,66 @@ class UpdateWindow(Adw.Window):
         threading.Thread(target=self._download_thread, daemon=True).start()
 
     def _download_thread(self):
-        url = self._update_info.get('url', '')
-        if not url:
-            GLib.idle_add(self._download_failed, 'No download URL provided')
-            return
         try:
-            urllib.request.urlretrieve(url, self._binary_dest, self._dl_callback)
+            temp_dir = Path('/tmp/manifest_update')
+            if temp_dir.exists():
+                shutil.rmtree(str(temp_dir))
+            temp_dir.mkdir(parents=True)
+
+            base = f'https://raw.githubusercontent.com/{OWNER}/{REPO}/main'
+            files = [
+                'manifest_studio.py',
+                'steam_injector.py',
+                'update_engine.py',
+                'game_database.py',
+            ]
+
+            for i, fn in enumerate(files):
+                url = f'{base}/{fn}'
+                r = requests.get(url, timeout=30)
+                r.raise_for_status()
+                (temp_dir / fn).write_bytes(r.content)
+                frac = (i + 1) / len(files)
+                GLib.idle_add(self._update_progress, frac, f'Downloading {fn}…')
+
+            # copy updater.sh
+            updater_src = Path(self._install_dir) / 'updater.sh'
+            if updater_src.exists():
+                shutil.copy2(str(updater_src), str(temp_dir / 'updater.sh'))
+            else:
+                (temp_dir / 'updater.sh').write_text(
+                    '#!/usr/bin/env bash\n'
+                    'set -euo pipefail\n'
+                    f'cp "$2"/*.py "$1/" 2>/dev/null || true\n'
+                    f'chmod +x "$1"/*.py 2>/dev/null || true\n'
+                    f'rm -rf "$2"\n'
+                    f'exec "$3"\n'
+                )
+            (temp_dir / 'updater.sh').chmod(0o755)
+
+            # create launch.sh
+            launch = temp_dir / 'launch.sh'
+            launch.write_text(
+                '#!/usr/bin/env bash\n'
+                f'cd "{self._install_dir}" || exit 1\n'
+                'LOG="log/launch.log"\n'
+                f'python3 manifest_studio.py >> "$LOG" 2>&1\n'
+            )
+            launch.chmod(0o755)
+
+            self._temp_dir = str(temp_dir)
+            self._launch_script = str(launch)
+
             GLib.idle_add(self._download_complete)
         except Exception as e:
             GLib.idle_add(self._download_failed, str(e))
 
-    def _dl_callback(self, block_num, block_size, total_size):
-        if total_size > 0:
-            frac = min(1.0, (block_num * block_size) / total_size)
-        else:
-            frac = 0.0
-        pct = int(frac * 100)
-        GLib.idle_add(self._update_progress, frac, pct)
-
-    def _update_progress(self, frac, pct):
+    def _update_progress(self, frac, message):
         self.progress_bar.set_value(frac)
-        self.status_label.set_text(f'Downloading… {pct}%')
+        self.status_label.set_text(message)
         return False
 
     def _download_complete(self):
-        os.chmod(self._binary_dest, 0o755)
         self.spinner.stop()
         self.spinner.set_visible(False)
         self.progress_bar.set_value(1.0)
@@ -278,39 +314,17 @@ class UpdateWindow(Adw.Window):
         self.download_btn.set_label('Retry Download')
 
     def _on_restart(self, *_):
-        apply_update_and_restart(self._binary_dest)
+        self.spinner.stop()
+        self.spinner.set_visible(False)
+        run_updater(self._install_dir, self._temp_dir, self._launch_script)
 
 
 # ---------- update / restart logic ----------
 
-def apply_update_and_restart(new_binary):
-    """Replace the running binary and restart."""
-    # Determine the path of the current executable
-    if getattr(sys, 'frozen', False):
-        current = sys.executable
-    else:
-        current = __file__
-
-    try:
-        os.replace(new_binary, current)
-        os.chmod(current, 0o755)
-    except OSError:
-        # fallback: copy + remove
-        import shutil
-        shutil.copy2(new_binary, current)
-        os.chmod(current, 0o755)
-
-    os.execv(current, [current])
-
-
 def show_update(update_info, parent=None):
     """Create and present the update window."""
     load_css()
-    temp_dir = Path('/tmp/manifest_update')
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    binary_dest = str(temp_dir / 'ManifestStudio')
-
-    win = UpdateWindow(update_info, binary_dest)
+    win = UpdateWindow(update_info)
     if parent and hasattr(parent, 'get_root'):
         win.set_transient_for(parent.get_root())
     win.present()
@@ -320,10 +334,16 @@ def show_update(update_info, parent=None):
 def check_and_notify(parent=None):
     if _SKIP_CHECK:
         return None
+    threading.Thread(
+        target=_bg_check_and_notify, args=(parent,), daemon=True
+    ).start()
+    return None
+
+
+def _bg_check_and_notify(parent):
     info = check_for_update()
     if info:
-        return show_update(info, parent)
-    return None
+        GLib.idle_add(show_update, info, parent)
 
 
 # -------------------------------------------------------------------

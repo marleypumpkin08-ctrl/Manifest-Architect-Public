@@ -9,7 +9,7 @@ from github import Github, GithubException
 
 REPO_NAME = 'Manifest-Architect-Public'
 VERSION_DATA = {
-    'version': '1.0.0',
+    'version': '1.1.0',
     'url': '',
     'changelog': 'Initial Release',
 }

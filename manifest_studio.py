@@ -659,7 +659,7 @@ class AppIDPage(Gtk.Box):
         child = self.quick_flow.get_first_child()
         while child:
             nxt = child.get_next_sibling()
-            if not child.get_data('is_db_card'):
+            if not getattr(child, '_is_db_card', False):
                 self.quick_flow.remove(child)
             child = nxt
 
@@ -756,7 +756,7 @@ class AppIDPage(Gtk.Box):
         btn.add_css_class('flat')
         btn.set_tooltip_text(f"Generate manifest for {info['name']}")
         btn.connect('clicked', self._on_quick_click, appid)
-        btn.set_data('is_db_card', True)
+        btn._is_db_card = True
 
         threading.Thread(
             target=self._dl_header, args=(appid, pic), daemon=True
@@ -1086,14 +1086,8 @@ class ManifestStudioWindow(Adw.ApplicationWindow):
 
         self._load_css()
 
-        # root box: banner on top, content below
+        # root box: content
         self.root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-
-        self.update_banner = Adw.Banner(title='')
-        self.update_banner.set_revealed(False)
-        self.update_banner.set_button_label('Restart to Update')
-        self.update_banner.connect('button-clicked', self._on_update_banner)
-        self.root_box.append(self.update_banner)
 
         self.toast_overlay = Adw.ToastOverlay()
         self.root_box.append(self.toast_overlay)
@@ -1112,7 +1106,7 @@ class ManifestStudioWindow(Adw.ApplicationWindow):
         self.view_stack.add_titled(self.updates, 'updates', 'Updates')
         self.view_stack.add_titled(self.library, 'library', 'Supported Library')
 
-        content_page = Adw.NavigationPage()
+        content_page = Adw.NavigationPage(title='Manifest Studio')
         content_page.set_child(self.view_stack)
 
         # sidebar
@@ -1156,7 +1150,7 @@ class ManifestStudioWindow(Adw.ApplicationWindow):
         sidebar_box.append(sidebar_list)
         sidebar_box.append(sync_btn)
 
-        sidebar_page = Adw.NavigationPage()
+        sidebar_page = Adw.NavigationPage(title='Manifest Studio')
         sidebar_page.set_child(sidebar_box)
         sidebar_page.add_css_class('sidebar')
 
@@ -1193,60 +1187,6 @@ class ManifestStudioWindow(Adw.ApplicationWindow):
 
     def _on_destroy(self, *_u):
         self.dropzone.cleanup()
-
-    # ---------- Auto-Update Banner ----------
-
-    def check_update_and_show_banner(self):
-        threading.Thread(
-            target=self._bg_check_update, daemon=True
-        ).start()
-
-    def _bg_check_update(self):
-        data = update_engine.fetch_version_requests()
-        if data is None:
-            return
-        GLib.idle_add(self._show_update_banner, data)
-
-    def _show_update_banner(self, data):
-        ver = data.get('version', '')
-        self.update_banner.set_title(f'Update Available: v{ver}')
-        self.update_banner.set_revealed(True)
-
-    def _on_update_banner(self, *_):
-        self.update_banner.set_sensitive(False)
-        self.update_banner.set_button_label('Downloading…')
-        threading.Thread(target=self._bg_download_update, daemon=True).start()
-
-    def _bg_download_update(self):
-        install_dir = str(Path(__file__).parent)
-        temp_dir = Path('/tmp/manifest_update_swap')
-        if temp_dir.exists():
-            shutil.rmtree(str(temp_dir))
-        temp_dir.mkdir(parents=True)
-
-        try:
-            update_engine.download_files(temp_dir)
-            launch_script = str(temp_dir / 'launch.sh')
-            launch_script_content = (
-                '#!/usr/bin/env bash\n'
-                f'cd "{install_dir}" || exit 1\n'
-                'LOG="log/launch.log"\n'
-                f'python3 manifest_studio.py >> "$LOG" 2>&1\n'
-            )
-            temp_dir.joinpath('launch.sh').write_text(launch_script_content)
-            temp_dir.joinpath('launch.sh').chmod(0o755)
-
-            GLib.idle_add(
-                update_engine.run_updater,
-                install_dir, str(temp_dir), launch_script,
-            )
-        except Exception as e:
-            GLib.idle_add(self._update_banner_error, str(e))
-
-    def _update_banner_error(self, msg):
-        self.update_banner.set_title(f'Update failed: {msg}')
-        self.update_banner.set_button_label('Retry')
-        self.update_banner.set_sensitive(True)
 
     # ---------- Steam Sync ----------
 
@@ -1382,7 +1322,7 @@ class ManifestStudioApp(Adw.Application):
         win = ManifestStudioWindow(application=app)
         win.present()
         GLib.timeout_add(1500, lambda: (
-            win.check_update_and_show_banner(),
+            update_engine.check_and_notify(win),
             False,
         )[1])
 
