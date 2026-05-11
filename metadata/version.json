@@ -1,5 +1,5 @@
 {
   "version": "1.1.0",
-  "url": "",
-  "changelog": "## v1.1.0\n- Supported Library tab with game cards and CDN header images\n- Subnautica 2 entry (AppID 1962700, 50GB, StateFlags 1026)\n- Lock overlay on un-unlocked games\n- Adw.Clamp centered layout (max 800px)\n- Updates tab with version check + changelog display\n- Quick Access database games with async header images\n- Auto-update AdwBanner with one-click download + restart\n- Release date display on library cards"
+  "url": "https://github.com/marleypumpkin08-ctrl/Manifest-Architect-Public/archive/refs/heads/main.zip",
+  "changelog": "## v1.1.0\n- Supported Library tab with game cards and CDN header images\n- Subnautica 2 entry (AppID 1962700, 50GB, StateFlags 1026)\n- Lock overlay on un-unlocked games\n- Adw.Clamp centered layout (max 800px)\n- Updates tab with version check + changelog display\n- Quick Access database games with async header images\n- Auto-update with source file download + updater.sh swap\n- Release date display on library cards"
 }
