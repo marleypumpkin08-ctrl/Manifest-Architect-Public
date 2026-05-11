@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
-  "url": "",
-  "changelog": "## Initial Release\n- Core GUI with Adw.NavigationSplitView\n- Drop Zone: drag-and-drop file injection\n- AppID Loader: generate ACF manifests\n- Supported Library: browse database games with header images\n- Steam Sync: fetch owned games via Vanity URL/SteamID64\n- Quick Access: one-click manifest generation\n- Auto-update engine with AdwBanner\n- Updates tab with changelog display\n- Multi-distro setup.sh (Fedora/Debian/openSUSE/Arch)\n- install.sh for local development\n- Subnautica 2 support (1962700, 50GB, StateFlags 1026)"
+  "version": "1.1.0",
+  "url": "https://github.com/marleypumpkin08-ctrl/Manifest-Architect-Public/archive/refs/heads/main.zip",
+  "changelog": "## v1.1.0\n- Supported Library tab with game cards and CDN header images\n- Subnautica 2 entry (AppID 1962700, 50GB, StateFlags 1026)\n- Lock overlay on un-unlocked games\n- Adw.Clamp centered layout (max 800px)\n- Updates tab with version check + changelog display\n- Quick Access database games with async header images\n- Auto-update AdwBanner with one-click download + restart\n- Release date display on library cards"
 }
