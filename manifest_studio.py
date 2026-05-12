@@ -1119,6 +1119,20 @@ class UpdatesPage(Gtk.Box):
 
     # ---------- actions ----------
 
+    def _show_download_ready(self, data):
+        self._update_data = data
+        ver = data['version']
+        self.subtitle.set_markup(
+            f'Update <b>v{ver}</b> is ready to install'
+        )
+        self.download_btn.set_label(f'Download v{ver}')
+        self.download_btn.set_sensitive(True)
+        self.dl_progress.set_visible(False)
+        self.dl_status.set_visible(False)
+        self.restart_btn.set_visible(False)
+        self.icon_stack.set_visible_child(self.update_icon)
+        self.btn_stack.set_visible_child(self.download_btn.get_parent())
+
     def _on_check(self, *_):
         self.check_btn.set_sensitive(False)
         self.check_btn.set_label('Checking…')
@@ -1142,7 +1156,7 @@ class UpdatesPage(Gtk.Box):
             self.btn_stack.set_visible_child(self.check_btn)
         else:
             self._update_data = data
-            ver = data['latest']
+            ver = data['version']
             self.subtitle.set_markup(
                 f'Version <b>{ver}</b> is ready'
             )
@@ -1762,6 +1776,18 @@ class ManifestStudioWindow(Adw.ApplicationWindow):
     def _on_destroy(self, *_u):
         self.dropzone.cleanup()
 
+    # ---------- Startup update check ----------
+
+    def _startup_check(self):
+        def _bg():
+            data = update_engine.fetch_version_requests()
+            if data:
+                GLib.idle_add(self._startup_update_found, data)
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def _startup_update_found(self, data):
+        self.updates._show_download_ready(data)
+
     # ---------- Refresh Steam ----------
 
     def _ensure_refresh_overlay(self):
@@ -2029,6 +2055,10 @@ class ManifestStudioApp(Adw.Application):
     def on_activate(self, app):
         win = ManifestStudioWindow(application=app)
         win.present()
+        GLib.timeout_add(2000, lambda: (
+            win._startup_check(),
+            False,
+        )[1])
 
 
 if __name__ == '__main__':
