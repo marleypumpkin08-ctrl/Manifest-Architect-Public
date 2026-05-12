@@ -1227,9 +1227,10 @@ class UpdatesPage(Gtk.Box):
                     '#!/usr/bin/env bash\n'
                     'set -euo pipefail\n'
                     f'cp "$2"/*.py "$1/" 2>/dev/null || true\n'
+                    f'cp "$2"/launch.sh "$1/" 2>/dev/null || true\n'
                     f'chmod +x "$1"/*.py 2>/dev/null || true\n'
                     f'rm -rf "$2"\n'
-                    f'exec "$3"\n'
+                    f'exec "$1"/launch.sh\n'
                 )
             (temp_dir / 'updater.sh').chmod(0o755)
 
@@ -1265,10 +1266,11 @@ class UpdatesPage(Gtk.Box):
         self.download_btn.set_sensitive(True)
 
     def _on_restart(self, *_):
+        install_dir = str(Path(__file__).parent)
         run_updater(
-            str(Path(__file__).parent),
+            install_dir,
             self._temp_dir,
-            self._launch_script,
+            os.path.join(install_dir, 'launch.sh'),
         )
 
 
