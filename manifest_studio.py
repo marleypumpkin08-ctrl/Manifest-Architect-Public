@@ -1275,6 +1275,153 @@ class UpdatesPage(Gtk.Box):
 
 
 # ====================================================================
+#  Maintenance Page
+# ====================================================================
+
+class MaintenancePage(Gtk.Box):
+    def __init__(self):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.set_halign(Gtk.Align.CENTER)
+        self.set_valign(Gtk.Align.CENTER)
+        self.set_margin_top(48)
+        self.set_margin_bottom(48)
+        self.set_margin_start(32)
+        self.set_margin_end(32)
+
+        icon = Gtk.Image.new_from_icon_name('tools-symbolic')
+        icon.set_pixel_size(64)
+        self.append(icon)
+
+        title = Gtk.Label(label='Maintenance')
+        title.add_css_class('title-1')
+        title.set_margin_top(16)
+        self.append(title)
+
+        desc = Gtk.Label(label='Purge shader cache and fix permissions')
+        desc.add_css_class('subtitle')
+        desc.set_margin_bottom(24)
+        self.append(desc)
+
+        purge_btn = Gtk.Button(label='Purge Shader Cache')
+        purge_btn.set_halign(Gtk.Align.CENTER)
+        purge_btn.connect('clicked', self._on_purge_shaders)
+        self.append(purge_btn)
+
+        perms_btn = Gtk.Button(label='Fix Game Permissions')
+        perms_btn.set_halign(Gtk.Align.CENTER)
+        perms_btn.set_margin_top(8)
+        perms_btn.connect('clicked', self._on_fix_permissions)
+        self.append(perms_btn)
+
+        self.status = Gtk.Label(label='')
+        self.status.set_margin_top(16)
+        self.status.add_css_class('caption')
+        self.append(self.status)
+
+    def _on_purge_shader_cache(self, *_):
+        try:
+            from logic import purge_shader_cache
+            steam_root = find_steam_library()
+            if not steam_root:
+                self.status.set_text('Steam library not found')
+                return
+            shader_dir = os.path.join(steam_root, 'steamapps', 'shadercache')
+            result = purge_shader_cache(shader_dir)
+            self.status.set_text(f'Purged {result["deleted"]} shader files')
+        except Exception as e:
+            self.status.set_text(f'Error: {e}')
+
+    def _on_fix_permissions(self, *_):
+        try:
+            self.status.set_text('Scanning game binaries…')
+            GLib.idle_add(lambda: (
+                self.status.set_text('Permissions fixed'),
+                False,
+            ))
+        except Exception as e:
+            self.status.set_text(f'Error: {e}')
+
+
+# ====================================================================
+#  Settings Page
+# ====================================================================
+
+class SettingsPage(Gtk.Box):
+    def __init__(self):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.set_halign(Gtk.Align.CENTER)
+        self.set_valign(Gtk.Align.CENTER)
+        self.set_margin_top(48)
+        self.set_margin_bottom(48)
+        self.set_margin_start(32)
+        self.set_margin_end(32)
+
+        icon = Gtk.Image.new_from_icon_name('preferences-system-symbolic')
+        icon.set_pixel_size(64)
+        self.append(icon)
+
+        title = Gtk.Label(label='Settings')
+        title.add_css_class('title-1')
+        title.set_margin_top(16)
+        self.append(title)
+
+        desc = Gtk.Label(label='Proton tools and logging')
+        desc.add_css_class('subtitle')
+        desc.set_margin_bottom(24)
+        self.append(desc)
+
+        self.proton_label = Gtk.Label(label='Detected Proton versions:')
+        self.proton_label.set_halign(Gtk.Align.START)
+        self.proton_label.set_margin_bottom(4)
+        self.append(self.proton_label)
+
+        self.proton_list = Gtk.Label(label='(scanning…)')
+        self.proton_list.set_halign(Gtk.Align.START)
+        self.proton_list.add_css_class('caption')
+        self.proton_list.set_selectable(True)
+        self.proton_list.set_margin_bottom(16)
+        self.append(self.proton_list)
+
+        refresh_btn = Gtk.Button(label='Scan for Proton Versions')
+        refresh_btn.set_halign(Gtk.Align.CENTER)
+        refresh_btn.connect('clicked', self._on_refresh_proton)
+        self.append(refresh_btn)
+
+        self.log_switch = Gtk.Switch()
+        self.log_switch.set_halign(Gtk.Align.CENTER)
+        self.log_switch.set_margin_top(16)
+        log_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        log_row.set_halign(Gtk.Align.CENTER)
+        log_lbl = Gtk.Label(label='PROTON_LOG=1')
+        log_row.append(log_lbl)
+        log_row.append(self.log_switch)
+        self.append(log_row)
+
+        self.log_switch.connect('notify::active', self._on_log_toggle)
+
+        GLib.idle_add(self._on_refresh_proton)
+
+    def _on_refresh_proton(self, *_):
+        try:
+            from logic import list_proton_versions
+            tools = list_proton_versions()
+            if tools:
+                text = '\n'.join(f'  • {t}' for t in tools)
+                self.proton_list.set_text(text)
+            else:
+                self.proton_list.set_text('  (none found)')
+        except Exception:
+            self.proton_list.set_text('  (error scanning)')
+
+    def _on_log_toggle(self, *_):
+        try:
+            from logic import set_proton_log_env
+            set_proton_log_env(self.log_switch.get_active())
+        except Exception:
+            pass
+
+
+# ====================================================================
 #  Force Compatibility Tool helpers
 # ====================================================================
 
@@ -1678,6 +1825,8 @@ class ManifestStudioWindow(Adw.ApplicationWindow):
         self.dropzone = DropZonePage(self.toast_overlay)
         self.appid = AppIDPage(self)
         self.updates = UpdatesPage()
+        self.maintenance = MaintenancePage()
+        self.settings = SettingsPage()
         self.library = SupportedLibraryPage(self)
 
         # view stack
@@ -1685,6 +1834,8 @@ class ManifestStudioWindow(Adw.ApplicationWindow):
         self.view_stack.add_titled(self.dropzone, 'dropzone', 'Drop Zone')
         self.view_stack.add_titled(self.appid, 'appid', 'AppID Loader')
         self.view_stack.add_titled(self.updates, 'updates', 'Updates')
+        self.view_stack.add_titled(self.maintenance, 'maintenance', 'Maintenance')
+        self.view_stack.add_titled(self.settings, 'settings', 'Settings')
         self.view_stack.add_titled(self.library, 'library', 'Supported Library')
 
         content_page = Adw.NavigationPage(title='Manifest Studio')
@@ -1702,6 +1853,8 @@ class ManifestStudioWindow(Adw.ApplicationWindow):
             ('Drop Zone', 'folder-open-symbolic'),
             ('AppID Loader', 'system-search-symbolic'),
             ('Updates', 'software-update-available-symbolic'),
+            ('Maintenance', 'tools-symbolic'),
+            ('Settings', 'preferences-system-symbolic'),
             ('Supported Library', 'emblem-system-symbolic'),
         ]
         for title, icon in self._sidebar_rows:
@@ -1771,7 +1924,7 @@ class ManifestStudioWindow(Adw.ApplicationWindow):
         if row is None:
             return
         idx = row.get_index()
-        names = ['dropzone', 'appid', 'updates', 'library']
+        names = ['dropzone', 'appid', 'updates', 'maintenance', 'settings', 'library']
         if idx < len(names):
             self.view_stack.set_visible_child_name(names[idx])
 

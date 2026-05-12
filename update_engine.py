@@ -17,7 +17,7 @@ gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gdk, GLib
 
 
-CURRENT_VERSION = '1.2.0'
+CURRENT_VERSION = '1.3.0'
 OWNER = 'marleypumpkin08-ctrl'
 REPO = 'Manifest-Architect-Public'
 

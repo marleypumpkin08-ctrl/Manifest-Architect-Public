@@ -34,7 +34,12 @@ def find_steam_library() -> str | None:
 
 
 def apply_subnautica_2_fix() -> None:
-    """Ghost-file bypass for Subnautica 2.
+    """Ghost-file bypass for Subnautica 2 with smart folder detection.
+
+    Checks for BOTH 'Subnautica 2' and 'Subnautica2' folder names.
+    Reads the existing appmanifest ACF to detect which installdir Steam
+    is pointing to, and creates the ghost file in the correct folder.
+    Fails back to whichever folder exists on disk, then to 'Subnautica 2'.
 
     Required behavior (per project audit):
       - AppID 1962700
@@ -49,24 +54,47 @@ def apply_subnautica_2_fix() -> None:
     if not steam_root:
         raise RuntimeError("Steam library not found")
 
-    target_dir = os.path.join(steam_root, "steamapps", "common", "Subnautica 2")
+    steamapps = os.path.join(steam_root, "steamapps")
+    acf_path = os.path.join(steamapps, f"appmanifest_{appid}.acf")
+
+    candidate_folders = ["Subnautica 2", "Subnautica2"]
+    chosen = None
+
+    # 1. Detect from existing ACF
+    if os.path.isfile(acf_path):
+        try:
+            with open(acf_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            for folder in candidate_folders:
+                if f'"installdir"\t\t"{folder}"' in content:
+                    chosen = folder
+                    break
+        except Exception:
+            pass
+
+    # 2. Fall back to whichever folder exists on disk
+    if chosen is None:
+        for folder in candidate_folders:
+            folder_path = os.path.join(steamapps, "common", folder)
+            if os.path.isdir(folder_path):
+                chosen = folder
+                break
+
+    # 3. Final fallback
+    if chosen is None:
+        chosen = "Subnautica 2"
+
+    target_dir = os.path.join(steamapps, "common", chosen)
     os.makedirs(target_dir, exist_ok=True)
 
     exe_path = os.path.join(target_dir, exe_name)
-
-    # Create 0-byte exe
     Path(exe_path).touch(exist_ok=True)
-
-    # Ensure executable
     try:
         os.chmod(exe_path, 0o755)
     except Exception:
         pass
 
-    steamapps = os.path.join(steam_root, "steamapps")
     os.makedirs(steamapps, exist_ok=True)
-    acf_path = os.path.join(steamapps, f"appmanifest_{appid}.acf")
-
     now_ts = int(datetime.now().timestamp())
     acf_text = (
         '"AppState"\n'
@@ -74,7 +102,7 @@ def apply_subnautica_2_fix() -> None:
         f"\t\"appid\"\t\t\"{appid}\"\n"
         '\t"Universe"\t\t"1"\n'
         f'\t"StateFlags"\t\t"{SUBNAUTICA2_STATEFLAGS}"\n'
-        '\t"installdir"\t\t"Subnautica 2"\n'
+        f'\t"installdir"\t\t"{chosen}"\n'
         f'\t"LastUpdated"\t\t"{now_ts}"\n'
         "}\n"
     )
