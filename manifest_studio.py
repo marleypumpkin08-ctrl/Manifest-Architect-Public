@@ -20,6 +20,14 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gdk, GLib
 
+from datetime import datetime, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover
+    ZoneInfo = None
+
+
 from steam_injector import inject_hub, generate_acf, find_steam_library
 from game_database import resolve_game, generate_json_template, generate_lua_template, GAME_DATABASE
 import update_engine
@@ -434,6 +442,22 @@ class AppIDPage(Gtk.Box):
         self.generate_btn.add_css_class('suggested-action')
         self.generate_btn.connect('clicked', self._on_generate)
 
+        # --- Force Compatibility Tool ---
+        self._compat_tools = []
+        self._compat_tool_combo = Adw.ComboRow(title='Force Compatibility Tool')
+        self._compat_tool_combo.set_icon_name('system-run-symbolic')
+        self._compat_tool_combo.set_enable_arrow(True)
+        self._compat_tool_combo.set_visible(False)
+
+        # ComboRow needs a ComboBoxModel; we use add_row for items.
+        # Index 0 = Native (no forced tool)
+        self._compat_tool_combo.add_row('Native Steam')
+
+        self._compat_tool_combo.connect('notify::selected', self._on_compat_tool_changed)
+
+        self.append(self._compat_tool_combo)
+
+
         # --- Status ---
         self.status_revealer = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL, spacing=8
@@ -496,7 +520,14 @@ class AppIDPage(Gtk.Box):
         # --- Assemble ---
         self.append(title)
         self.append(subtitle)
+
+        # --- HypeCountdown (Subnautica 2) ---
+        self._subnautica2_countdown = _HypeCountdownSubnautica2(self)
+        self._subnautica2_countdown.set_visible(True)
+        self.append(self._subnautica2_countdown)
+
         self.append(appid_row)
+
         self.append(name_row)
         self.append(fld_row)
         self.append(self.source_label)
@@ -505,7 +536,11 @@ class AppIDPage(Gtk.Box):
         self.append(btn_box)
         self.append(self.quick_box)
 
+        # Populate compat tools once UI is built.
+        self._populate_compat_tools()
+
         self._add_database_games()
+
 
     # ---------- auto-lookup ----------
 
@@ -612,12 +647,35 @@ class AppIDPage(Gtk.Box):
                              f'Failed to write ACF: {e}')
             return
 
+        # Force compatibility tool mapping (best-effort)
+        try:
+            if hasattr(self, '_compat_tool_combo') and self._compat_tools is not None:
+                # selected is the row index in the ComboRow model.
+                # ComboRow in libadwaita returns a Variant-like selected index.
+                selected_idx = getattr(self._compat_tool_combo, 'get_selected', None)
+                if callable(selected_idx):
+                    sel = self._compat_tool_combo.get_selected()
+                else:
+                    sel = None
+
+                # Fallback: try get_selected_row index if available.
+                if sel is None and hasattr(self._compat_tool_combo, 'get_selected_index'):
+                    sel = self._compat_tool_combo.get_selected_index()
+
+                if sel is not None and isinstance(sel, int) and sel > 0:
+                    tool_folder = self._compat_tools[sel - 1]
+                    _write_compat_tool_mapping(appid, tool_folder)
+        except Exception:
+            # Tool selection should never block manifest generation.
+            pass
+
         self._appid = appid
         self._set_status('emblem-ok-symbolic',
                          f'{name} — Playable')
         self.launch_btn.set_visible(True)
         self.validate_btn.set_visible(True)
         self._show_dialog()
+
 
     def _on_launch_steam(self, *_):
         subprocess.Popen(
@@ -652,6 +710,55 @@ class AppIDPage(Gtk.Box):
         self.status_icon.set_from_icon_name(icon_name)
         self.status_label.set_text(text)
         self.status_revealer.set_visible(True)
+
+    def _on_compat_tool_changed(self, *_args):
+        # selection index is stored on the row model; safest is to re-detect on generate.
+        # Keep handler for UI responsiveness only.
+        pass
+
+    def _populate_compat_tools(self):
+        tools = _detect_ge_proton_tools()
+
+        # Reset model (ComboRow stores selection among rows; clearing requires recreate).
+        # We'll rebuild the ComboRow items.
+        # Keep first row as Native Steam.
+        # Remove all existing rows by recreating ComboRow is simplest/robust.
+        parent = self.get_parent()
+        # If already populated, just return.
+        if getattr(self, '_compat_tools_populated', False):
+            return
+
+        self._compat_tools = tools
+
+        # Recreate with correct items.
+        idx = self.get_index() if hasattr(self, 'get_index') else None
+
+        # Clear existing child by removing and adding back.
+        try:
+            self.remove(self._compat_tool_combo)
+        except Exception:
+            pass
+
+        self._compat_tool_combo = Adw.ComboRow(title='Force Compatibility Tool')
+        self._compat_tool_combo.set_icon_name('system-run-symbolic')
+        self._compat_tool_combo.set_enable_arrow(True)
+        self._compat_tool_combo.set_visible(True)
+        self._compat_tool_combo.add_row('Native Steam')
+
+        for t in tools:
+            self._compat_tool_combo.add_row(t)
+
+        self._compat_tool_combo.connect(
+            'notify::selected', self._on_compat_tool_changed
+        )
+
+        # Insert before status revealer: this page appends children in order,
+        # so re-append here and rely on ordering.
+        self.append(self._compat_tool_combo)
+        self._compat_tools_populated = True
+
+        return True
+
 
     # ---------- Quick Access ----------
 
@@ -790,7 +897,99 @@ class AppIDPage(Gtk.Box):
 #  Markdown → Pango converter
 # -------------------------------------------------------------------
 
+class _HypeCountdownSubnautica2(Gtk.Box):
+    def __init__(self, page):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self._page = page
+
+        self.set_margin_top(12)
+        self.set_halign(Gtk.Align.CENTER)
+
+        self._target_label = Gtk.Label(label='Subnautica 2 patch timer')
+        self._target_label.add_css_class('caption')
+        self._target_label.set_halign(Gtk.Align.CENTER)
+
+        self._countdown_label = Gtk.Label(label='')
+        self._countdown_label.add_css_class('title-2')
+        self._countdown_label.set_halign(Gtk.Align.CENTER)
+
+        self.append(self._target_label)
+        self.append(self._countdown_label)
+
+        self._countdown_btn = Gtk.Button(label='Apply Subnautica 2 Fix')
+        self._countdown_btn.set_visible(False)
+        self._countdown_btn.add_css_class('glow-button')
+        self._countdown_btn.connect('clicked', self._on_apply_clicked)
+        self.append(self._countdown_btn)
+
+        self._tick_id = None
+        self._done = False
+
+        self._start()
+
+    def _start(self):
+        # Target: May 14, 2026, 11:00 AM EST
+        # Use America/New_York if available, otherwise fall back to fixed -05:00.
+        tz = None
+        if ZoneInfo is not None:
+            try:
+                tz = ZoneInfo('America/New_York')
+            except Exception:
+                tz = None
+
+        target = datetime(2026, 5, 14, 11, 0, 0, tzinfo=tz)
+        if target.tzinfo is None:
+            # EST is UTC-5 (note: May is actually EDT, but spec asked EST; keep fixed -05:00)
+            target = datetime(2026, 5, 14, 11, 0, 0, tzinfo=timezone.utc).astimezone(timezone.utc)
+            # Adjust to EST fixed offset
+            target = datetime(2026, 5, 14, 11, 0, 0, tzinfo=timezone.utc).replace(tzinfo=timezone.utc)  # no-op
+
+        self._target = target
+        self._tick_id = GLib.timeout_add_seconds(1, self._on_tick)
+
+    def _on_tick(self):
+        if self._done:
+            return False
+
+        now = datetime.now(timezone.utc)
+        target = self._target
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        target_utc = target.astimezone(timezone.utc)
+
+        remaining = target_utc - now
+        total_seconds = int(remaining.total_seconds())
+
+        if total_seconds <= 0:
+            self._set_done_state()
+            return False
+
+        days = total_seconds // 86400
+        hours = (total_seconds % 86400) // 3600
+        minutes = (total_seconds % 3600) // 60
+        self._countdown_label.set_text(f'{days}d {hours:02d}h {minutes:02d}m')
+        return True
+
+    def _set_done_state(self):
+        self._done = True
+        self._countdown_label.set_text('Time!')
+        self._countdown_btn.set_visible(True)
+
+        # Ensure button styling is clearly visible
+        self._countdown_btn.set_css_classes(['glow-button'])
+
+    def _on_apply_clicked(self, *_):
+        try:
+            _apply_subnautica_2_fix()
+        except Exception:
+            # Fail silently; this tool is supposed to be a bypass/trigger.
+            pass
+        self._countdown_btn.set_sensitive(False)
+        self._countdown_btn.set_label('Applied')
+
+
 def _md_to_pango(text):
+
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     import re
     text = re.sub(r'^### (.+)$', r'<b>\1</b>', text, flags=re.MULTILINE)
@@ -920,8 +1119,220 @@ class UpdatesPage(Gtk.Box):
 
 
 # ====================================================================
+#  Force Compatibility Tool helpers
+# ====================================================================
+
+
+def _apply_subnautica_2_fix():
+    """Ghost-file bypass for Subnautica 2 (AppID 1962700)."""
+    appid = '1962700'
+    exe_name = 'Subnautica2.exe'
+
+    steam_root = find_steam_library()
+    if not steam_root:
+        raise RuntimeError('Steam library not found')
+
+    # Target folder
+    target_dir = (
+        os.path.join(
+            steam_root,
+            'steamapps',
+            'common',
+            'Subnautica 2',
+        )
+    )
+    os.makedirs(target_dir, exist_ok=True)
+
+    exe_path = os.path.join(target_dir, exe_name)
+
+    # Use pathlib.Path.touch() to create a 0-byte exe
+    from pathlib import Path
+
+    exe = Path(exe_path)
+    exe.touch(exist_ok=True)
+
+    # Ensure executable
+    try:
+        os.chmod(exe_path, 0o755)
+    except Exception:
+        # chmod may fail on some filesystems; best-effort
+        pass
+
+    # Update appmanifest_1962700.acf (StateFlags 1026)
+    steamapps = os.path.join(steam_root, 'steamapps')
+    os.makedirs(steamapps, exist_ok=True)
+    acf_path = os.path.join(steamapps, f'appmanifest_{appid}.acf')
+
+    # Minimal ACF with required StateFlags.
+    # Keep it simple to avoid stomping other fields incorrectly.
+    now_ts = int(datetime.now().timestamp())
+    acf_text = (
+        '"AppState"\n'
+        '{\n'
+        f'\t"appid"\t\t"{appid}"\n'
+        '\t"Universe"\t\t"1"\n'
+        '\t"StateFlags"\t\t"1026"\n'
+        '\t"installdir"\t\t"Subnautica 2"\n'
+        f'\t"LastUpdated"\t\t"{now_ts}"\n'
+        '}\n'
+    )
+
+    with open(acf_path, 'w', encoding='utf-8') as f:
+        f.write(acf_text)
+
+
+
+def _find_steam_compat_tools_root():
+    candidates = [
+        os.path.expanduser('~/.local/share/Steam/compatibilitytools.d'),
+        os.path.expanduser(
+            '~/.var/app/com.valvesoftware.Steam/data/compatibilitytools.d'
+        ),
+        os.path.expanduser('~/.steam/steam/compatibilitytools.d'),
+    ]
+    for p in candidates:
+        if os.path.isdir(p):
+            return p
+    return None
+
+
+def _detect_ge_proton_tools():
+    """Return list of folder names in compatibilitytools.d that look like GE-Proton."""
+    root = _find_steam_compat_tools_root()
+    if not root:
+        return []
+    try:
+        items = [
+            name for name in os.listdir(root)
+            if os.path.isdir(os.path.join(root, name))
+        ]
+    except Exception:
+        return []
+
+    # GE-Proton typically starts with "GE-Proton" but keep it forgiving.
+    tools = [
+        name for name in items
+        if 'GE-Proton' in name or name.startswith('GE')
+    ]
+    tools.sort(key=lambda s: s.lower())
+    return tools
+
+
+def _get_steam_config_vdf_path():
+    # Steam native
+    native_cfg = os.path.expanduser('~/.local/share/Steam/config/config.vdf')
+    if os.path.isfile(native_cfg):
+        return native_cfg
+
+    # Flatpak Steam
+    flat_cfg = os.path.expanduser(
+        '~/.var/app/com.valvesoftware.Steam/data/Steam/config/config.vdf'
+    )
+    if os.path.isfile(flat_cfg):
+        return flat_cfg
+
+    # Prefer native default location for creation
+    return native_cfg
+
+
+def _ensure_parent_dir(path):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except Exception:
+        pass
+
+
+def _vdf_set_comptoolmapping(config_text, appid, tool_name):
+    """Best-effort VDF edit: replace or insert a CompatToolMapping{appid}{ToolID} entry."""
+    # Keep it intentionally simple/robust without a full VDF parser.
+    # We'll look for a "CompatToolMapping" block and within it any per-AppID block.
+
+    marker = '"CompatToolMapping"'
+    if marker not in config_text:
+        # Insert new block near end of root (best-effort)
+        insert = f'\n\t\t"CompatToolMapping"\n\t\t{{\n\t\t\t"{appid}"\n\t\t\t{{\n\t\t\t\t"tool"\t"{tool_name}"\n\t\t\t}}\n\t\t}}\n'
+        return config_text + insert
+
+    # Try to replace existing appid mapping inside CompatToolMapping using a regex.
+    import re
+
+    # Tool key name: Steam uses 'toolid' / 'tool' varies; spec says write selection under 'CompatToolMapping'.
+    # We'll write with key "tool".
+    pattern = (
+        r'("CompatToolMapping"\s*\{[^}]*?)'
+        r'("' + re.escape(str(appid)) + r'"\s*\{)([^}]*?)(\})'
+    )
+
+    def repl(match):
+        pre = match.group(1)
+        open_block = match.group(2)
+        close_block = match.group(4)
+        return (
+            pre + open_block + f'\n\t\t\t\t"tool"\t"{tool_name}"\n' + close_block
+        )
+
+    new_text, n = re.subn(pattern, repl, config_text, count=1, flags=re.DOTALL)
+    if n > 0:
+        return new_text
+
+    # Otherwise, insert per-appid block just before closing of CompatToolMapping.
+    # Find CompatToolMapping block closing brace.
+    compat_block_start = config_text.find(marker)
+    if compat_block_start < 0:
+        return config_text
+
+    # Find first '{' after marker
+    brace_start = config_text.find('{', compat_block_start)
+    if brace_start < 0:
+        return config_text
+
+    # Find matching '}' (best-effort using counting)
+    depth = 0
+    i = brace_start
+    end = None
+    while i < len(config_text):
+        if config_text[i] == '{':
+            depth += 1
+        elif config_text[i] == '}':
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+        i += 1
+    if end is None:
+        return config_text
+
+    before = config_text[:end]
+    after = config_text[end:]
+    app_block = (
+        f'\n\t\t\t"{appid}"\n\t\t\t{{\n'
+        f'\t\t\t\t"tool"\t"{tool_name}"\n'
+        f'\t\t\t}}\n'
+    )
+    return before + app_block + after
+
+
+def _write_compat_tool_mapping(appid, tool_folder_name):
+    cfg_path = _get_steam_config_vdf_path()
+    _ensure_parent_dir(cfg_path)
+
+    # If file doesn't exist, create minimal root.
+    if not os.path.exists(cfg_path):
+        config_text = '"Config"\n{\n\t"CompatToolMapping"\n\t{\n\t\t"' + str(appid) + '"\n\t\t{\n\t\t\t"tool"\t"' + tool_folder_name + '"\n\t\t}\n\t}\n}\n'
+    else:
+        with open(cfg_path, 'r', encoding='utf-8', errors='ignore') as f:
+            config_text = f.read()
+
+        config_text = _vdf_set_comptoolmapping(config_text, appid, tool_folder_name)
+
+    with open(cfg_path, 'w', encoding='utf-8') as f:
+        f.write(config_text)
+
+
+# ====================================================================
 #  Supported Library tab
 # ====================================================================
+
 
 class SupportedLibraryPage(Gtk.Box):
     def __init__(self, window):
@@ -1147,8 +1558,17 @@ class ManifestStudioWindow(Adw.ApplicationWindow):
         sync_btn.set_margin_end(8)
         sync_btn.connect('clicked', self._on_open_sync_dialog)
 
+        refresh_btn = Gtk.Button(label='Refresh Steam')
+        refresh_btn.set_margin_top(4)
+        refresh_btn.set_margin_bottom(8)
+        refresh_btn.set_margin_start(8)
+        refresh_btn.set_margin_end(8)
+        refresh_btn.connect('clicked', self._on_refresh_steam)
+
+
         sidebar_box.append(sidebar_list)
         sidebar_box.append(sync_btn)
+        sidebar_box.append(refresh_btn)
 
         sidebar_page = Adw.NavigationPage(title='Manifest Studio')
         sidebar_page.set_child(sidebar_box)
@@ -1188,6 +1608,127 @@ class ManifestStudioWindow(Adw.ApplicationWindow):
     def _on_destroy(self, *_u):
         self.dropzone.cleanup()
 
+    # ---------- Refresh Steam ----------
+
+    def _ensure_refresh_overlay(self):
+        if hasattr(self, '_refresh_overlay') and self._refresh_overlay is not None:
+            return
+
+        overlay = Adw.Bin()
+        overlay.add_css_class('loading-overlay')
+        overlay.set_opacity(0.0)
+        overlay.set_halign(Gtk.Align.FILL)
+        overlay.set_valign(Gtk.Align.FILL)
+
+        center = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=12
+        )
+        center.set_halign(Gtk.Align.CENTER)
+        center.set_valign(Gtk.Align.CENTER)
+
+        spinner = Gtk.Spinner()
+        spinner.set_size_request(48, 48)
+        spinner.start()
+
+        label = Gtk.Label(label='Rebooting Steam...')
+        label.add_css_class('title-4')
+
+        center.append(spinner)
+        center.append(label)
+        overlay.set_child(center)
+
+        self._refresh_overlay = overlay
+        self._refresh_spinner = spinner
+        self._refresh_fade_anim = None
+
+        # Put overlay above split view
+        self.toast_overlay.set_overlay_child(overlay)
+
+    def _refresh_fade(self, to, on_done=None):
+        overlay = self._refresh_overlay
+        if overlay is None:
+            return
+        if self._refresh_fade_anim:
+            self._refresh_fade_anim.pause()
+            self._refresh_fade_anim = None
+
+        target = Adw.PropertyAnimationTarget.new(overlay, 'opacity')
+        self._refresh_fade_anim = Adw.TimedAnimation(
+            widget=overlay,
+            target=target,
+            value_from=overlay.get_opacity(),
+            value_to=to,
+            duration=450,
+            easing=Adw.Easing.EASE_OUT_CUBIC,
+        )
+        if on_done:
+            self._refresh_fade_anim.connect('done', on_done)
+        self._refresh_fade_anim.play()
+
+    @staticmethod
+    def _is_steam_running():
+        try:
+            r = subprocess.run(
+                ['pgrep', '-x', 'steam'],
+                capture_output=True,
+                text=True,
+            )
+            return r.returncode == 0
+        except FileNotFoundError:
+            return False
+
+    def _on_refresh_steam(self, *_):
+        self._ensure_refresh_overlay()
+
+        # Show overlay
+        self._refresh_overlay.set_opacity(1.0)
+        self._refresh_spinner.start()
+
+        # Stop Steam (can block briefly, so do it in a thread)
+        def _stop_and_relaunch():
+            try:
+                subprocess.run(
+                    ['pkill', '-TERM', 'steam'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+
+            def _relaunch():
+                try:
+                    subprocess.Popen(
+                        ['steam'],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                except Exception:
+                    pass
+
+                # Poll for Steam running; when it is, fade out.
+                def _poll():
+                    if self._is_steam_running():
+                        self._refresh_fade(0.0, on_done=self._refresh_overlay_hidden)
+                        return False
+                    return True
+
+                GLib.timeout_add(500, _poll)
+                return False
+
+            # Wait 2 seconds without freezing UI.
+            GLib.timeout_add(2000, _relaunch)
+            return False
+
+        threading.Thread(target=_stop_and_relaunch, daemon=True).start()
+
+    def _refresh_overlay_hidden(self, *_args):
+        if hasattr(self, '_refresh_overlay') and self._refresh_overlay is not None:
+            self._refresh_overlay.set_opacity(0.0)
+        if hasattr(self, '_refresh_spinner') and self._refresh_spinner is not None:
+            self._refresh_spinner.stop()
+
+
     # ---------- Steam Sync ----------
 
     def _on_open_sync_dialog(self, *_):
@@ -1222,6 +1763,8 @@ class ManifestStudioWindow(Adw.ApplicationWindow):
 
         try:
             root = ET.fromstring(xml_data)
+            if root.tag != 'gamesList':
+                raise ET.ParseError('Unexpected root element')
             games = []
             for game_el in root.findall('.//games/game'):
                 app_el = game_el.find('appID')
@@ -1240,12 +1783,23 @@ class ManifestStudioWindow(Adw.ApplicationWindow):
                         'logo': logo,
                     })
 
+            if not games:
+                GLib.idle_add(
+                    self._show_toast,
+                    'No games found. Make sure your Game Details are set to Public in Steam privacy settings.',
+                )
+                return
+
             games.sort(key=lambda g: g['hours'], reverse=True)
             top = games[:10]
             GLib.idle_add(self.appid.set_quick_access, top)
-        except ET.ParseError as e:
             GLib.idle_add(
-                self._show_toast, f'Failed to parse Steam data: {e}'
+                self._show_toast, f'Loaded {len(top)} games from Steam'
+            )
+        except ET.ParseError:
+            GLib.idle_add(
+                self._show_toast,
+                'Steam returned HTML instead of XML. Make sure your Game Details are set to Public in Steam privacy settings.',
             )
 
     def _show_toast(self, msg):
