@@ -1021,6 +1021,9 @@ class UpdatesPage(Gtk.Box):
         self.set_margin_start(32)
         self.set_margin_end(32)
 
+        self._update_data = None
+        self._update_signal_id = None
+
         # --- icon area ---
         self.icon_stack = Gtk.Stack()
         self.icon_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
@@ -1106,6 +1109,10 @@ class UpdatesPage(Gtk.Box):
             self.check_btn.remove_css_class('suggested-action')
             self.subtitle.set_label('You are up to date')
             self.changelog_scroll.set_visible(False)
+            try:
+                self.check_btn.disconnect(self._update_signal_id)
+            except Exception:
+                pass
         else:
             ver = data['version']
             self.check_btn.set_label(f'Update v{ver} Available')
@@ -1120,7 +1127,19 @@ class UpdatesPage(Gtk.Box):
                 self.changelog_label.set_markup(html)
                 self.changelog_scroll.set_visible(True)
 
+            try:
+                self.check_btn.disconnect(self._update_signal_id)
+            except Exception:
+                pass
+            self._update_data = data
+            self._update_signal_id = self.check_btn.connect(
+                'clicked', self._on_download_update
+            )
+
         self.check_btn.set_sensitive(True)
+
+    def _on_download_update(self, *_):
+        update_engine.show_update(self._update_data, self.get_root())
 
 
 # ====================================================================
