@@ -1124,11 +1124,25 @@ class UpdatesPage(Gtk.Box):
 
 
 def _apply_subnautica_2_fix():
-    """Ghost-file bypass for Subnautica 2 (AppID 1962700)."""
+    """Ghost-file bypass for Subnautica 2 (AppID 1962700).
+
+    Delegates to logic.py to ensure the bypass is implemented consistently.
+    """
+    # Use shared implementation (logic.py)
+    try:
+        from logic import apply_subnautica_2_fix as _logic_apply_subnautica_2_fix
+
+        _logic_apply_subnautica_2_fix()
+        return
+    except Exception:
+        # Fallback to legacy inline implementation if logic.py isn't available.
+        pass
+
     appid = '1962700'
     exe_name = 'Subnautica2.exe'
 
     steam_root = find_steam_library()
+
     if not steam_root:
         raise RuntimeError('Steam library not found')
 

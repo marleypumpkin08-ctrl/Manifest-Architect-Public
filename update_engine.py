@@ -102,26 +102,28 @@ def check_for_update():
     data = fetch_latest_version()
     if data is None:
         return None
-    latest = data.get('version', '')
-    # Only notify when there's a strictly newer version.
-    # Prevents infinite popups / repeated dialogs for equal versions.
-    if latest <= CURRENT_VERSION:
-        return None
-
-    # Additional safety: treat equal versions as up-to-date.
-    # Avoids update-window creation in any edge-cases where version fields
-    # might be non-string or contain whitespace.
-    latest_norm = str(latest).strip()
+    latest_raw = data.get('version', '')
+    latest_norm = str(latest_raw).strip()
     current_norm = str(CURRENT_VERSION).strip()
-    if latest_norm <= current_norm:
+
+    # Only notify when there's a strictly newer version.
+    # Use a proper comparison (latest > current), not 'not equal'.
+    def _to_tuple(v: str) -> tuple[int, ...]:
+        try:
+            return tuple(int(p) for p in v.split('.'))
+        except Exception:
+            return (0,)
+
+    if _to_tuple(latest_norm) <= _to_tuple(current_norm):
         return None
 
     return {
-        'current': CURRENT_VERSION,
+        'current': current_norm,
         'latest': latest_norm,
         'url': data.get('url', ''),
         'changelog': data.get('changelog', ''),
     }
+
 
 
 def download_progress(block_num, block_size, total_size):
@@ -134,6 +136,7 @@ def download_progress(block_num, block_size, total_size):
 
 class UpdateWindow(Adw.Window):
     def __init__(self, update_info):
+
         super().__init__()
         self._update_info = update_info
         self._install_dir = str(Path(__file__).parent)
@@ -358,21 +361,38 @@ def _bg_check_and_notify(parent):
 
 
 # -------------------------------------------------------------------
-#  AdwBanner-based auto-update (lightweight)
+#  Lightweight version request helper
 # -------------------------------------------------------------------
 
 def fetch_version_requests():
+
     if _SKIP_CHECK:
         return None
     try:
         r = requests.get(VERSION_URL, timeout=10)
         r.raise_for_status()
         data = r.json()
-        if data.get('version', '') == CURRENT_VERSION:
+
+        latest_norm = str(data.get('version', '')).strip()
+        current_norm = str(CURRENT_VERSION).strip()
+
+        # Only return update payload when latest > current.
+        def _to_tuple(v: str) -> tuple[int, ...]:
+            try:
+                return tuple(int(p) for p in v.split('.'))
+            except Exception:
+                return (0,)
+
+        if _to_tuple(latest_norm) <= _to_tuple(current_norm):
             return None
+
+        # Strictly newer only: latest > current.
+        data['version'] = latest_norm
         return data
+
     except Exception:
         return None
+
 
 
 def download_files(temp_dir):
@@ -417,6 +437,12 @@ def run_updater(install_dir, temp_dir, launch_script):
 
 
 if __name__ == '__main__':
+    # Standalone updater entrypoint.
+    # Only performs the check once; if versions match, no window is shown.
     app = Adw.Application(application_id='com.manifeststudio.updater')
-    app.connect('activate', lambda a: check_and_notify())
+    app.connect(
+        'activate',
+        lambda a: check_and_notify(),
+    )
     app.run()
+
