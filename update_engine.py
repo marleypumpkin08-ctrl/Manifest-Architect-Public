@@ -17,7 +17,7 @@ gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gdk, GLib, Gio, Pango
 
 
-CURRENT_VERSION = '1.1.0'
+CURRENT_VERSION = '1.2.0'
 OWNER = 'marleypumpkin08-ctrl'
 REPO = 'Manifest-Architect-Public'
 
@@ -103,11 +103,22 @@ def check_for_update():
     if data is None:
         return None
     latest = data.get('version', '')
-    if latest == CURRENT_VERSION:
+    # Only notify when there's a strictly newer version.
+    # Prevents infinite popups / repeated dialogs for equal versions.
+    if latest <= CURRENT_VERSION:
         return None
+
+    # Additional safety: treat equal versions as up-to-date.
+    # Avoids update-window creation in any edge-cases where version fields
+    # might be non-string or contain whitespace.
+    latest_norm = str(latest).strip()
+    current_norm = str(CURRENT_VERSION).strip()
+    if latest_norm <= current_norm:
+        return None
+
     return {
         'current': CURRENT_VERSION,
-        'latest': latest,
+        'latest': latest_norm,
         'url': data.get('url', ''),
         'changelog': data.get('changelog', ''),
     }
