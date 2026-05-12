@@ -412,6 +412,7 @@ def download_files(temp_dir):
 
 def run_updater(install_dir, temp_dir, launch_script):
     updater_src = Path(__file__).parent / 'updater.sh'
+    temp_dir = Path(temp_dir)
     updater_dst = temp_dir / 'updater.sh'
     if updater_src.exists():
         shutil.copy2(str(updater_src), str(updater_dst))
