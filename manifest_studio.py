@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover
 from steam_injector import inject_hub, generate_acf, find_steam_library
 from game_database import resolve_game, generate_json_template, generate_lua_template, GAME_DATABASE
 import update_engine
-from update_engine import to_version_tuple
+from update_engine import to_version_tuple, run_updater
 
 
 CSS = '''
@@ -53,6 +53,21 @@ CSS = '''
 .progress-glow.complete trough progress {
     background: linear-gradient(90deg, #33d17a, #57e389);
     box-shadow: 0 0 10px 2px alpha(#33d17a, 0.6);
+}
+
+.update-progress levelbar trough {
+    min-height: 8px;
+    border-radius: 6px;
+}
+
+.update-progress levelbar trough block {
+    border-radius: 6px;
+    background: linear-gradient(90deg, #3584e4, #62a0ea);
+}
+
+.update-progress levelbar trough block.filled {
+    background: linear-gradient(90deg, #33d17a, #57e389);
+    box-shadow: 0 0 8px 1px alpha(#33d17a, 0.5);
 }
 
 .game-header {
@@ -1022,7 +1037,6 @@ class UpdatesPage(Gtk.Box):
         self.set_margin_end(32)
 
         self._update_data = None
-        self._update_signal_id = None
 
         # --- icon area ---
         self.icon_stack = Gtk.Stack()
@@ -1059,31 +1073,49 @@ class UpdatesPage(Gtk.Box):
         self.subtitle.set_margin_bottom(24)
         self.append(self.subtitle)
 
-        # --- button ---
+        # --- button stack (crossfade between check / download) ---
+        self.btn_stack = Gtk.Stack()
+        self.btn_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.btn_stack.set_transition_duration(400)
+        self.btn_stack.set_halign(Gtk.Align.CENTER)
+
         self.check_btn = Gtk.Button(label='Check for Updates')
-        self.check_btn.set_halign(Gtk.Align.CENTER)
         self.check_btn.add_css_class('pill')
         self.check_btn.connect('clicked', self._on_check)
-        self.append(self.check_btn)
+        self.btn_stack.add_child(self.check_btn)
 
-        # --- changelog ---
-        self.changelog_scroll = Gtk.ScrolledWindow()
-        self.changelog_scroll.set_policy(
-            Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC
-        )
-        self.changelog_scroll.set_max_content_height(300)
-        self.changelog_scroll.set_visible(False)
-        self.changelog_scroll.set_margin_top(24)
+        dl_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        dl_box.set_halign(Gtk.Align.CENTER)
+        self.download_btn = Gtk.Button(label='Download Update')
+        self.download_btn.add_css_class('suggested-action')
+        self.download_btn.connect('clicked', self._on_download)
+        self.download_btn.set_halign(Gtk.Align.CENTER)
 
-        self.changelog_label = Gtk.Label()
-        self.changelog_label.set_selectable(True)
-        self.changelog_label.set_use_markup(True)
-        self.changelog_label.set_xalign(0.0)
-        self.changelog_label.set_wrap(True)
-        self.changelog_label.set_wrap_mode(3)  # WORD_CHAR
-        self.changelog_scroll.set_child(self.changelog_label)
+        self.dl_progress = Gtk.LevelBar()
+        self.dl_progress.set_min_value(0.0)
+        self.dl_progress.set_max_value(1.0)
+        self.dl_progress.set_value(0.0)
+        self.dl_progress.set_visible(False)
+        self.dl_progress.set_size_request(200, 6)
+        self.dl_progress.add_css_class('update-progress')
 
-        self.append(self.changelog_scroll)
+        self.dl_status = Gtk.Label(label='')
+        self.dl_status.add_css_class('caption')
+        self.dl_status.set_visible(False)
+
+        self.restart_btn = Gtk.Button(label='Update Ready — Restart')
+        self.restart_btn.add_css_class('suggested-action')
+        self.restart_btn.set_visible(False)
+        self.restart_btn.set_halign(Gtk.Align.CENTER)
+        self.restart_btn.connect('clicked', self._on_restart)
+
+        dl_box.append(self.download_btn)
+        dl_box.append(self.dl_progress)
+        dl_box.append(self.dl_status)
+        dl_box.append(self.restart_btn)
+        self.btn_stack.add_child(dl_box)
+
+        self.append(self.btn_stack)
 
     # ---------- actions ----------
 
@@ -1092,7 +1124,6 @@ class UpdatesPage(Gtk.Box):
         self.check_btn.set_label('Checking…')
         self.icon_stack.set_visible_child(self.check_spinner)
         self.check_spinner.start()
-        self.changelog_scroll.set_visible(False)
 
         threading.Thread(target=self._bg_check, daemon=True).start()
 
@@ -1105,41 +1136,126 @@ class UpdatesPage(Gtk.Box):
         self.icon_stack.set_visible_child(self.update_icon)
 
         if data is None or to_version_tuple(data.get('version', '')) <= to_version_tuple(update_engine.CURRENT_VERSION):
+            self.subtitle.set_markup('You are <b>up to date</b>')
             self.check_btn.set_label('Check for Updates')
-            self.check_btn.remove_css_class('suggested-action')
-            self.subtitle.set_label('You are up to date')
-            self.changelog_scroll.set_visible(False)
-            try:
-                self.check_btn.disconnect(self._update_signal_id)
-            except Exception:
-                pass
+            self.check_btn.set_sensitive(True)
+            self.btn_stack.set_visible_child(self.check_btn)
         else:
-            ver = data['version']
-            self.check_btn.set_label(f'Update v{ver} Available')
-            self.check_btn.add_css_class('suggested-action')
-            self.subtitle.set_label(
-                f'Version {ver} is ready to download'
+            self._update_data = data
+            ver = data['latest']
+            self.subtitle.set_markup(
+                f'Version <b>{ver}</b> is ready'
             )
-
             changelog = data.get('changelog', '')
             if changelog:
-                html = _md_to_pango(changelog)
-                self.changelog_label.set_markup(html)
-                self.changelog_scroll.set_visible(True)
+                self.subtitle.set_markup(
+                    f'Version <b>{ver}</b> — {changelog}'
+                )
+            self.download_btn.set_label(f'Download v{ver}')
+            self.download_btn.set_sensitive(True)
+            self.dl_progress.set_visible(False)
+            self.dl_status.set_visible(False)
+            self.restart_btn.set_visible(False)
+            self.btn_stack.set_visible_child(self.download_btn.get_parent())
 
-            try:
-                self.check_btn.disconnect(self._update_signal_id)
-            except Exception:
-                pass
-            self._update_data = data
-            self._update_signal_id = self.check_btn.connect(
-                'clicked', self._on_download_update
+        GLib.timeout_add(5000, lambda: (
+            self.subtitle.set_label('Check for new versions of Manifest Studio'),
+            False,
+        )[1])
+
+    def _on_download(self, *_):
+        self.download_btn.set_sensitive(False)
+        self.download_btn.set_label('Downloading…')
+        self.dl_progress.set_value(0.0)
+        self.dl_progress.set_visible(True)
+        self.dl_status.set_text('Starting download…')
+        self.dl_status.set_visible(True)
+        self.restart_btn.set_visible(False)
+        threading.Thread(target=self._download_thread, daemon=True).start()
+
+    def _download_thread(self):
+        import shutil
+        from pathlib import Path
+        import requests as reqs
+
+        install_dir = str(Path(__file__).parent)
+        temp_dir = Path('/tmp/manifest_update')
+
+        try:
+            if temp_dir.exists():
+                shutil.rmtree(str(temp_dir))
+            temp_dir.mkdir(parents=True)
+
+            base = 'https://raw.githubusercontent.com'
+            base += f'/{update_engine.OWNER}/{update_engine.REPO}/main'
+            files = [
+                'manifest_studio.py',
+                'steam_injector.py',
+                'update_engine.py',
+                'game_database.py',
+                'logic.py',
+            ]
+
+            n = len(files)
+            for i, fn in enumerate(files):
+                url = f'{base}/{fn}'
+                r = reqs.get(url, timeout=30)
+                r.raise_for_status()
+                (temp_dir / fn).write_bytes(r.content)
+                frac = (i + 1) / n
+                GLib.idle_add(self._dl_progress_update, frac, f'Downloading {fn}…')
+
+            updater_src = Path(install_dir) / 'updater.sh'
+            if updater_src.exists():
+                shutil.copy2(str(updater_src), str(temp_dir / 'updater.sh'))
+            else:
+                (temp_dir / 'updater.sh').write_text(
+                    '#!/usr/bin/env bash\n'
+                    'set -euo pipefail\n'
+                    f'cp "$2"/*.py "$1/" 2>/dev/null || true\n'
+                    f'chmod +x "$1"/*.py 2>/dev/null || true\n'
+                    f'rm -rf "$2"\n'
+                    f'exec "$3"\n'
+                )
+            (temp_dir / 'updater.sh').chmod(0o755)
+
+            launch = temp_dir / 'launch.sh'
+            launch.write_text(
+                '#!/usr/bin/env bash\n'
+                f'cd "{install_dir}" || exit 1\n'
+                'LOG="log/launch.log"\n'
+                f'python3 manifest_studio.py >> "$LOG" 2>&1\n'
             )
+            launch.chmod(0o755)
 
-        self.check_btn.set_sensitive(True)
+            self._temp_dir = str(temp_dir)
+            self._launch_script = str(launch)
+            GLib.idle_add(self._dl_complete)
+        except Exception as e:
+            GLib.idle_add(self._dl_failed, str(e))
 
-    def _on_download_update(self, *_):
-        update_engine.show_update(self._update_data, self.get_root())
+    def _dl_progress_update(self, frac, msg):
+        self.dl_progress.set_value(frac)
+        self.dl_status.set_text(msg)
+        return False
+
+    def _dl_complete(self):
+        self.dl_progress.set_value(1.0)
+        self.dl_status.set_text('Download complete!')
+        self.download_btn.set_visible(False)
+        self.restart_btn.set_visible(True)
+
+    def _dl_failed(self, error):
+        self.dl_status.set_text(f'Failed: {error}')
+        self.download_btn.set_label('Retry Download')
+        self.download_btn.set_sensitive(True)
+
+    def _on_restart(self, *_):
+        run_updater(
+            str(Path(__file__).parent),
+            self._temp_dir,
+            self._launch_script,
+        )
 
 
 # ====================================================================
@@ -1913,10 +2029,6 @@ class ManifestStudioApp(Adw.Application):
     def on_activate(self, app):
         win = ManifestStudioWindow(application=app)
         win.present()
-        GLib.timeout_add(1500, lambda: (
-            update_engine.check_and_notify(win),
-            False,
-        )[1])
 
 
 if __name__ == '__main__':
